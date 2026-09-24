@@ -1,0 +1,5 @@
+MLB-StatsAPI
+pybaseball
+pandas
+numpy
+scipy
