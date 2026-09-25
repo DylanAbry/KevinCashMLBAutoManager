@@ -17,6 +17,8 @@ class BatterModel:
     risp_delta: float = 0.0           # wOBA change with runners in scoring position
     steal_attempt: float = 0.0        # P(attempt steal of 2B) per PA with a runner on 1st and 2nd open
     steal_success: float = 0.78
+    field_pos: str = ""               # this lineup slot's defensive position (for defensive-sub matching)
+    def_rpg162: float = 0.0           # this starter's own defensive runs/162 at field_pos
 
     def woba(self, vs_starter: bool) -> float:
         return self.woba_starter if vs_starter else self.woba_pen
@@ -73,12 +75,32 @@ class InningsPolicy:
 
 
 @dataclass
+class BenchPlayer:
+    name: str
+    profile: tuple                    # (K, BB, 1B, 2B, 3B, HR) rates per PA, own hitting shape
+    woba_starter: float                # expected wOBA vs the opposing starter, precomputed like a lineup spot
+    woba_pen: float
+    positions: tuple = ()             # positions he can field, e.g. ("CF", "RF")
+    def_runs: float = 0.0             # runs/162 above average at his best position (fielding upgrade)
+    bat_side: str = "R"
+    risp_delta: float = 0.0
+    steal_attempt: float = 0.0
+    steal_success: float = 0.78
+
+    def as_batter(self) -> "BatterModel":
+        return BatterModel(self.name, self.profile, self.woba_starter, self.woba_pen,
+                           self.risp_delta, self.steal_attempt, self.steal_success)
+
+
+@dataclass
 class TeamSide:
     name: str
     batters: list[BatterModel]        # in batting order
     starter_innings: int = 6          # legacy: innings THIS team's starter works before its bullpen takes over
     staff: list | None = None         # this team's pitchers (PitcherModel); staff[0] starts. None = legacy 2-pitcher staff
     policy: object | None = None      # decides pitching changes; None = InningsPolicy(starter_innings)
+    bench: list | None = None         # BenchPlayer options, ranked as given (best bats first is fine)
+    style: str = "typical"            # "typical", "auto", or "never" - governs bunts, IBBs, bench moves
 
 
 def league_batter(woba: float = 0.315, name: str = "League avg", steals: bool = True) -> BatterModel:

@@ -3,13 +3,14 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date
 
+from data.ballparks import park_factor
 from data.names import find_by_name, norm
 from decisions.batting_order import order_lineup
 from decisions.bullpen import AutoPolicy, TypicalPolicy
 from decisions.lineup import build_lineup, draft_lineup
-from models.matchup import neutral_pitcher
+from models.matchup import neutral_pitcher, park_woba_shift
 from sim.engine import simulate
-from sim.setup import make_side, make_staff
+from sim.setup import make_bench_player, make_side, make_staff
 from sim.types import Ctx
 
 
@@ -104,6 +105,15 @@ def print_staff(title: str, staff) -> None:
         print(f"{m.name:<26}{m.throws:<5}{m.role:<6}{m.quality():>13.3f}  {status}")
 
 
+def print_bench(title: str, bench) -> None:
+    if not bench:
+        return
+    print(f"\n{title}\n")
+    print(f"{'Player':<24}{'Bats':<5}{'Pos':<10}{'xwOBA':>7}{'Def/162':>9}")
+    for b in bench:
+        print(f"{b.name:<24}{b.bat_side:<5}{','.join(b.positions):<10}{b.woba_starter:>7.3f}{b.def_runs:>+9.1f}")
+
+
 def print_usage(res, staff) -> None:
     print("\nProjected bullpen usage under the AutoManager plan (simulated):")
     print(f"  starter averages {res.starter_outs / 3:.1f} innings; {res.relievers_used:.1f} relievers used per game")
@@ -111,6 +121,8 @@ def print_usage(res, staff) -> None:
     for m, (name, pct, outs) in zip(staff, res.usage):
         if pct >= 0.01:
             print(f"  {name:<26}{m.role:<6}{pct * 100:>8.0f}%{outs:>10.1f}")
+    print(f"\nPer team-game: {res.bunts_pg:.2f} sac bunts, {res.ibbs_pg:.2f} intentional walks, "
+          f"{res.pinch_hits_pg:.2f} pinch hits, {res.def_subs_pg:.2f} defensive substitutions.")
 
 
 def parse_situation(text: str) -> dict:
@@ -173,6 +185,10 @@ def main():
                     help='Force a hitter into a batting slot, e.g. --pin "Bichette:2" (also makes him start)')
     ap.add_argument("--unavailable", default="", help='Your relievers who cannot pitch, comma-separated')
     ap.add_argument("--opp-unavailable", dest="opp_unavailable", default="", help="Their relievers who cannot pitch")
+    ap.add_argument("--park", help="Ballpark team code for park factors, e.g. COL (default: the home team's park)")
+    ap.add_argument("--style", choices=["typical", "auto", "never"], default="typical",
+                    help="Your tactics (bunts, IBBs, pinch hitters, defensive subs) in the comparison scenarios; "
+                         "the AutoManager scenario always uses 'auto'")
     ap.add_argument("--situation", help='Ask what the AutoManager would do mid-game, e.g. '
                     '"inning=7,outs=1,runners=13,lead=1,pitches=88,batter=4,tto=2"')
     ap.add_argument("--venue", choices=["home", "away"], help="Override home/away (default: from the schedule, else home)")
@@ -204,6 +220,9 @@ def main():
         sys.exit("A hitter can't be both benched and forced to start")
     ours = [h for h in inp.ours if h.id not in benched]
 
+    park_code = args.park or (args.team if we_home else args.opponent)
+    park_shift = park_woba_shift(park_factor(park_code)) if park_code else 0.0
+
     our_starter = inp.our_starter or neutral_pitcher("R")
     opp_lineup = None
     if inp.theirs:
@@ -226,11 +245,18 @@ def main():
     opp_label = "Opposing lineup (drafted by you)" if args.opp_lineup else "Opposing lineup (projected optimal)"
     print_lineup(f"{opp_label} vs {our_starter.name}", opp_lineup, footnote=False)
 
+    our_bench_hitters = [h for h in ours if h.id not in {s.hitter.id for s in best.spots}]
+    opp_bench_hitters = [h for h in inp.theirs if h.id not in {s.hitter.id for s in opp_lineup.spots}] if inp.theirs else []
+    our_bench = [make_bench_player(h, inp.opp_starter, opp_def, park_shift) for h in our_bench_hitters]
+    opp_bench = [make_bench_player(h, our_starter, best.def_rpg, park_shift) for h in opp_bench_hitters]
+    if args.show_data:
+        print_bench("Our bench", our_bench)
+
     def staffs(lu):
         ours_s = make_staff(inp.our_starter, inp.our_pen, [s.hitter for s in opp_lineup.spots], lu.def_rpg,
-                            args.unavailable.split(","))
+                            args.unavailable.split(","), park_shift)
         theirs_s = make_staff(inp.opp_starter, inp.opp_pen, [s.hitter for s in lu.spots], opp_lineup.def_rpg,
-                              args.opp_unavailable.split(","))
+                              args.opp_unavailable.split(","), park_shift)
         return ours_s, theirs_s
 
     our_staff, _ = staffs(best)
@@ -241,23 +267,28 @@ def main():
 
     baseline = build_lineup(ours, inp.opp_starter, defense_weight=0.0, forced=forced)   # offense-first, ignores gloves
     print(f"\nSimulating {args.sims:,} games per scenario ({'home' if we_home else 'away'}) ...")
-    scenarios = [("Lineup + AutoManager bullpen", best, AutoPolicy()),
-                 ("Lineup + typical bullpen use", best, TypicalPolicy()),
-                 ("Offense-first lineup + typical", baseline, TypicalPolicy())]
+    scenarios = [("Lineup + AutoManager (bullpen+tactics)", best, AutoPolicy(), "auto"),
+                 ("Lineup + typical bullpen/tactics", best, TypicalPolicy(), args.style),
+                 ("Offense-first lineup + typical", baseline, TypicalPolicy(), args.style)]
     rows = []
-    for label, lu, policy in scenarios:
+    for label, lu, policy, style in scenarios:
         ours_s, theirs_s = staffs(lu)
-        us = make_side("Us", lu.spots, inp.opp_starter, opp_lineup.def_rpg, staff=ours_s, policy=policy)
-        them = make_side("Them", opp_lineup.spots, our_starter, lu.def_rpg, staff=theirs_s, policy=TypicalPolicy())
+        us = make_side("Us", lu.spots, inp.opp_starter, opp_lineup.def_rpg, staff=ours_s, policy=policy,
+                      park_shift=park_shift, bench=our_bench, style=style)
+        them = make_side("Them", opp_lineup.spots, our_starter, lu.def_rpg, staff=theirs_s, policy=TypicalPolicy(),
+                         park_shift=park_shift, bench=opp_bench, style="typical")
         rows.append((label, simulate(us, them, we_home, args.sims, seed=42)))
-    print(f"\n{'':<34}{'Runs/G':>8}{'Opp R/G':>9}{'Win %':>8}{'SP IP':>7}{'Relievers':>10}{'Extras':>8}")
+    print(f"\n{'':<38}{'Runs/G':>8}{'Opp R/G':>9}{'Win %':>8}{'SP IP':>7}{'Relievers':>10}{'Extras':>8}")
     for label, r in rows:
-        print(f"{label:<34}{r.runs_for:>8.2f}{r.runs_against:>9.2f}{r.win_pct * 100:>7.1f}%"
+        print(f"{label:<38}{r.runs_for:>8.2f}{r.runs_against:>9.2f}{r.win_pct * 100:>7.1f}%"
               f"{r.starter_outs / 3:>7.1f}{r.relievers_used:>10.1f}{r.extras_pct * 100:>7.1f}%")
     print_usage(rows[0][1], our_staff)
-    print("\nSame random seed in every scenario. The opponent always uses typical bullpen management. The simulation"
-          " includes home-field advantage, steals, errors, RISP, extra innings, times-through-the-order, fatigue and"
-          " reliever rest. Win% differences under ~1 point are within simulation noise.")
+    if park_code:
+        print(f"\nBallpark: {park_code} (park factor {park_factor(park_code):.2f}; 1.00 = neutral, applied to both teams).")
+    print("\nSame random seed in every scenario. The opponent always fields with typical bullpen/tactics management."
+          " The simulation includes home-field advantage, steals, errors, RISP, extra innings, times-through-the-order,"
+          " fatigue, reliever rest, ballpark factors, intentional walks, sacrifice bunts, pinch hitters and defensive"
+          " substitutions. Win% differences under ~1 point are within simulation noise.")
 
 
 if __name__ == "__main__":

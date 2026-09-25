@@ -9,9 +9,10 @@ from sim.types import TTO_STARTER, BatterModel, PitcherModel, TeamSide
 GENERIC_PEN_THROWS = "RRRLRLR"     # used only if no bullpen data could be loaded
 
 
-def make_batter(h, opp_starter, opp_defense_rpg: float = 0.0) -> BatterModel:
+def make_batter(h, opp_starter, opp_defense_rpg: float = 0.0, park_shift: float = 0.0,
+               field_pos: str = "", def_rpg162: float = 0.0) -> BatterModel:
     """opp_defense_rpg: runs per game the OPPOSING defense saves; it lowers this hitter's wOBA per PA."""
-    shift = -opp_defense_rpg * WOBA_SCALE / TEAM_PA_PER_GAME
+    shift = -opp_defense_rpg * WOBA_SCALE / TEAM_PA_PER_GAME + park_shift
     attempt, success = steal_rates(h)
     return BatterModel(
         name=h.name,
@@ -21,13 +22,30 @@ def make_batter(h, opp_starter, opp_defense_rpg: float = 0.0) -> BatterModel:
         risp_delta=risp_delta_woba(h),
         steal_attempt=attempt,
         steal_success=success,
+        field_pos=field_pos,
+        def_rpg162=def_rpg162,
     )
 
 
 def make_side(name, spots, opp_starter, opp_defense_rpg: float, starter_innings: int = 6,
-              staff=None, policy=None) -> TeamSide:
-    return TeamSide(name, [make_batter(s.hitter, opp_starter, opp_defense_rpg) for s in spots],
-                    starter_innings, staff, policy)
+              staff=None, policy=None, park_shift: float = 0.0, bench=None, style: str = "typical") -> TeamSide:
+    batters = [make_batter(s.hitter, opp_starter, opp_defense_rpg, park_shift, s.field_pos, s.def_rpg * 162)
+              for s in spots]
+    return TeamSide(name, batters, starter_innings, staff, policy, bench, style)
+
+
+def make_bench_player(h, opp_starter, opp_defense_rpg: float = 0.0, park_shift: float = 0.0) -> "BenchPlayer":
+    from sim.types import BenchPlayer
+    shift = -opp_defense_rpg * WOBA_SCALE / TEAM_PA_PER_GAME + park_shift
+    attempt, success = steal_rates(h)
+    best_pos = max(h.def_runs, key=h.def_runs.get) if h.def_runs else ""
+    best_def = h.def_runs.get(best_pos, 0.0) / (h.pa / 4.1 + 40) * 162 if best_pos else 0.0
+    return BenchPlayer(
+        name=h.name, profile=shrunk_profile(h.season),
+        woba_starter=expected_woba(h, opp_starter) + shift, woba_pen=bullpen_woba(h) + shift,
+        positions=tuple(h.def_runs) or (h.pos,), def_runs=best_def, bat_side=h.bat_side,
+        risp_delta=risp_delta_woba(h), steal_attempt=attempt, steal_success=success,
+    )
 
 
 def _assign_roles(models: list[PitcherModel], pitchers: list[Pitcher]) -> None:
@@ -49,10 +67,11 @@ def _assign_roles(models: list[PitcherModel], pitchers: list[Pitcher]) -> None:
         models[lr].role = "LR"
 
 
-def make_staff(starter, relievers, opp_hitters, own_defense_rpg: float = 0.0, unavailable=()) -> list[PitcherModel]:
+def make_staff(starter, relievers, opp_hitters, own_defense_rpg: float = 0.0, unavailable=(),
+              park_shift: float = 0.0) -> list[PitcherModel]:
     """Turn real pitchers into simulator PitcherModels against a specific opposing lineup (in batting order).
     own_defense_rpg is the runs per game OUR defense saves; it lowers what the pitchers allow."""
-    shift = -own_defense_rpg * WOBA_SCALE / TEAM_PA_PER_GAME
+    shift = -own_defense_rpg * WOBA_SCALE / TEAM_PA_PER_GAME + park_shift
     starter = starter or Pitcher(0, "League-average starter", "R", {})
     if not relievers:
         relievers = [Pitcher(0, f"Reliever {i + 1}", t, {}) for i, t in enumerate(GENERIC_PEN_THROWS)]

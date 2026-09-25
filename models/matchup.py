@@ -25,6 +25,8 @@ K_PITCHER = 300
 K_RISP = 800                 # raise this to trust RISP splits more, lower it to trust them less
 BULLPEN_RIGHTY_SHARE = 0.70
 
+PARK_DAMPING = 0.55          # how much of the park factor actually reaches wOBA (HR/hits mix vs walks/Ks)
+
 LEAGUE_STEAL_ATTEMPT = 0.09  # per plate appearance with a runner on 1st and 2nd base open
 LEAGUE_STEAL_SUCCESS = 0.78
 K_ATTEMPT = 60               # times-on-first of prior
@@ -97,3 +99,9 @@ def bullpen_woba(h: Hitter) -> float:
     r = expected_woba(h, neutral_pitcher("R"))
     l = expected_woba(h, neutral_pitcher("L"))
     return BULLPEN_RIGHTY_SHARE * r + (1 - BULLPEN_RIGHTY_SHARE) * l
+
+
+def park_woba_shift(factor: float) -> float:
+    """Convert a park run-scoring factor (1.00 = neutral) into a wOBA shift applied to every hitter and
+    pitcher in the game equally."""
+    return (factor - 1.0) * LEAGUE_WOBA * PARK_DAMPING

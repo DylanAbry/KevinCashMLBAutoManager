@@ -81,6 +81,37 @@ def _out(b1, b2, b3, outs):
     return res
 
 
+P_BUNT_HIT = 0.10           # batter reaches on the bunt (rare but real)
+P_BUNT_DP = 0.08            # bunted into a double play (only possible with runner on 1st and < 2 outs)
+
+
+def _sac_bunt(b1, b2, b3, outs):
+    """Bunt with a runner on. Only sane with a force at 2nd/3rd or a runner on 1st; called from engine only
+    when that's true. Batter is out (or safe on a good bunt); lead runner(s) advance one base."""
+    if outs >= 2:
+        return [(1.0, (0, *_stay(b1, b2, b3)))]           # no reason to bunt with 2 outs; treated as a plain out
+    adv = (2 if b1 else -1, 3 if b2 else -1, 4 if b3 else -1)
+    res = [(1 - P_BUNT_HIT - (P_BUNT_DP if b1 else 0), (0, *adv))]
+    res.append((P_BUNT_HIT, (1, adv[0] if adv[0] == 2 else (1 if b1 else -1), *adv[1:])))
+    if b1:
+        res.append((P_BUNT_DP, (0, 0, adv[1], adv[2])))
+    return res
+
+
+@lru_cache(maxsize=None)
+def bunt_transitions(bases: int, outs: int) -> tuple:
+    b1, b2, b3 = bool(bases & 1), bool(bases & 2), bool(bases & 4)
+    return tuple(_sac_bunt(b1, b2, b3, outs))
+
+
+@lru_cache(maxsize=None)
+def bunt_transition_table(bases: int, outs: int) -> tuple:
+    tr = bunt_transitions(bases, outs)
+    cum = list(accumulate(p for p, _ in tr))
+    cum[-1] = 1.0
+    return cum, [d for _, d in tr]
+
+
 @lru_cache(maxsize=None)
 def transitions(bases: int, outs: int, outcome: int) -> tuple:
     b1, b2, b3 = bool(bases & 1), bool(bases & 2), bool(bases & 4)
