@@ -38,4 +38,27 @@ def demo_hitters(seed: int = 7, prefix: str = "Player") -> list[Hitter]:
 
 
 def demo_pitcher(name: str = "Demo Lefty", throws: str = "L") -> Pitcher:
-    return Pitcher(id=999, name=name, throws=throws, vs={"L": (0.640, 180), "R": (0.760, 420)})
+    return Pitcher(id=999, name=name, throws=throws, vs={"L": (0.640, 180), "R": (0.760, 420)},
+                   season={"gs": 25, "g": 25, "ip": 150.0})
+
+
+def demo_staff(seed: int, prefix: str, starter_name: str, starter_throws: str = "R"):
+    """(starter, relievers) with varied quality, roles, and a couple of tired arms."""
+    rng = random.Random(seed)
+    starter = Pitcher(id=900 + seed, name=starter_name, throws=starter_throws,
+                      vs={"L": (rng.uniform(0.66, 0.74), 250), "R": (rng.uniform(0.64, 0.74), 500)},
+                      season={"gs": 26, "g": 26, "ip": 155.0})
+    relievers = []
+    for i in range(8):
+        throws = "L" if i in (2, 5) else "R"
+        skill = 0.60 + 0.03 * i + rng.uniform(-0.03, 0.03)            # lower OPS allowed = better; i=0 is the closer
+        p = Pitcher(id=1000 + seed * 20 + i, name=f"{prefix} RP{i + 1}", throws=throws,
+                    vs={"L": (skill + rng.uniform(-0.06, 0.06), rng.randint(80, 200)),
+                        "R": (skill + rng.uniform(-0.06, 0.06), rng.randint(120, 260))},
+                    season={"gs": 0, "g": 55 - 2 * i, "ip": 58 - 3 * i + (12 if i == 6 else 0),
+                            "sv": max(0, 28 - 9 * i), "hld": max(0, 24 - 6 * i), "gf": max(0, 40 - 8 * i)})
+        relievers.append(p)
+    if seed % 2 == 0:            # give one team a tired setup man and a burned-out middle man
+        relievers[1].recent = [(1, 27)]
+        relievers[3].recent = [(1, 24), (2, 22), (3, 18)]
+    return starter, relievers

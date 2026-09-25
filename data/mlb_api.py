@@ -27,11 +27,11 @@ def get_team_id(term: str, season: int) -> int:
     return matches[0]["id"]
 
 
-def _people(ids: list[int], hydrate: str, label: str, season: int) -> list[dict]:
+def _people(ids: list[int], hydrate: str, label: str, season: int, ttl: float = 12) -> list[dict]:
     import statsapi
     key = f"people_{label}_{season}_" + "-".join(map(str, sorted(ids)))[:80]
     return cached(key, lambda: statsapi.get(
-        "people", {"personIds": ",".join(map(str, ids)), "hydrate": hydrate})["people"])
+        "people", {"personIds": ",".join(map(str, ids)), "hydrate": hydrate})["people"], ttl)
 
 
 def _people_with_splits(ids: list[int], group: str, season: int) -> list[dict]:
@@ -99,6 +99,69 @@ def get_hitters(team_id: int, season: int) -> list[Hitter]:
     enrich_hitters(hitters, season)
     _attach_extras(hitters, season)
     return hitters
+
+
+def _ip(x) -> float:
+    """MLB innings strings look like '63.1' (= 63 and 1/3)."""
+    try:
+        whole, _, frac = str(x).partition(".")
+        return int(whole) + int(frac or 0) / 3
+    except ValueError:
+        return 0.0
+
+
+def _parse_pitch_season(person: dict) -> dict:
+    for block in person.get("stats", []):
+        for s in block.get("splits", []):
+            st = s.get("stat", {})
+            if "gamesPitched" in st or "inningsPitched" in st:
+                return {"gs": _num(st.get("gamesStarted")), "g": _num(st.get("gamesPitched")),
+                        "ip": _ip(st.get("inningsPitched")), "sv": _num(st.get("saves")),
+                        "hld": _num(st.get("holds")), "gf": _num(st.get("gamesFinished"))}
+    return {}
+
+
+def _parse_recent(person: dict) -> list[tuple[int, int]]:
+    out, today = [], date.today()
+    for block in person.get("stats", []):
+        for s in block.get("splits", []):
+            d = s.get("date")
+            if not d:
+                continue
+            try:
+                days = (today - date.fromisoformat(d)).days
+            except ValueError:
+                continue
+            if 0 < days <= 4:
+                out.append((days, int(_num(s.get("stat", {}).get("numberOfPitches")))))
+    return out
+
+
+def get_pitchers(team_id: int, season: int) -> list[Pitcher]:
+    """Every pitcher on the active roster: platoon splits, season role stats, and recent workload."""
+    import statsapi
+    roster = cached(f"roster_{team_id}", lambda: statsapi.get(
+        "team_roster", {"teamId": team_id, "rosterType": "active"})["roster"])
+    ids = [r["person"]["id"] for r in roster if r["position"]["type"] == "Pitcher"]
+    if not ids:
+        return []
+    pitchers = [Pitcher(id=p["id"], name=p["fullName"], throws=p.get("pitchHand", {}).get("code", "R"),
+                        vs=_parse_splits(p, "battersFaced"))
+                for p in _people_with_splits(ids, "pitching", season)]
+    by_id = {p.id: p for p in pitchers}
+    try:
+        for p in _people(ids, f"stats(group=[pitching],type=[season],season={season})", "pseason", season):
+            if p["id"] in by_id:
+                by_id[p["id"]].season = _parse_pitch_season(p)
+    except Exception as e:  # noqa: BLE001
+        warn(f"couldn't load pitcher season lines ({type(e).__name__}: {e}); bullpen roles will be inferred from quality")
+    try:
+        for p in _people(ids, f"stats(group=[pitching],type=[gameLog],season={season})", "pgamelog", season, ttl=2):
+            if p["id"] in by_id:
+                by_id[p["id"]].recent = _parse_recent(p)
+    except Exception as e:  # noqa: BLE001
+        warn(f"couldn't load recent pitcher workload ({type(e).__name__}: {e}); assuming every reliever is rested")
+    return pitchers
 
 
 def get_pitcher(pitcher_id: int, season: int) -> Pitcher:

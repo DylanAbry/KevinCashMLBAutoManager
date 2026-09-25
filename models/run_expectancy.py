@@ -1,33 +1,36 @@
-from dataclasses import dataclass
+"""Run expectancy (RE24) and a simple win-probability estimate.
+
+The RE24 values are approximate modern-MLB averages (expected runs from this state to the end of the
+half-inning). They can later be recomputed from your own simulator or real play-by-play data.
+"""
+from math import erf, sqrt
+
+from .game_state import GameState
+
+# key: (base_index, outs); base_index = 1*(runner on 1B) + 2*(2B) + 4*(3B)
+RE24 = {
+    (0, 0): 0.50, (0, 1): 0.27, (0, 2): 0.10,
+    (1, 0): 0.90, (1, 1): 0.54, (1, 2): 0.22,
+    (2, 0): 1.13, (2, 1): 0.69, (2, 2): 0.33,
+    (3, 0): 1.47, (3, 1): 0.93, (3, 2): 0.46,
+    (4, 0): 1.36, (4, 1): 0.95, (4, 2): 0.37,
+    (5, 0): 1.79, (5, 1): 1.17, (5, 2): 0.50,
+    (6, 0): 2.00, (6, 1): 1.38, (6, 2): 0.58,
+    (7, 0): 2.28, (7, 1): 1.53, (7, 2): 0.75,
+}
+RUNS_PER_HALF_INNING = 0.50
+VAR_PER_HALF_INNING = 1.10
 
 
-@dataclass
-class GameState:
-    """Everything a manager needs to know about the current moment of a game.
-    Later modules (bullpen, pinch hitting) will add pitch counts, bench and bullpen availability."""
-    inning: int = 1
-    top: bool = True                                        # True = away team batting
-    outs: int = 0
-    bases: tuple[bool, bool, bool] = (False, False, False)  # 1B, 2B, 3B occupied
-    away_score: int = 0
-    home_score: int = 0
-    away_batter: int = 0                                    # next lineup slot (0-8) due up
-    home_batter: int = 0
+def run_expectancy(state: GameState) -> float:
+    return RE24[(state.base_index, min(state.outs, 2))]
 
-    @property
-    def batting_home(self) -> bool:
-        return not self.top
 
-    @property
-    def base_index(self) -> int:
-        b1, b2, b3 = self.bases
-        return int(b1) + 2 * int(b2) + 4 * int(b3)
-
-    @property
-    def batting_lead(self) -> int:
-        return (self.home_score - self.away_score) if self.batting_home else (self.away_score - self.home_score)
-
-    def __str__(self) -> str:
-        runners = "".join(n if on else "-" for n, on in zip("123", self.bases))
-        half = "Top" if self.top else "Bot"
-        return f"{half} {self.inning}, {self.outs} out, runners {runners}, AWAY {self.away_score} HOME {self.home_score}"
+def win_prob_home(s: GameState) -> float:
+    """Normal approximation of the home team's win probability from the current state."""
+    future_top = max(9 - s.inning, 0)
+    future_bot = max(9 - s.inning, 0) + (1 if s.top else 0)
+    mean = (s.home_score - s.away_score) + (future_bot - future_top) * RUNS_PER_HALF_INNING
+    mean += run_expectancy(s) * (-1 if s.top else 1)
+    sd = sqrt(VAR_PER_HALF_INNING * (future_top + future_bot + 1))
+    return 0.5 * (1 + erf(mean / (sd * sqrt(2))))

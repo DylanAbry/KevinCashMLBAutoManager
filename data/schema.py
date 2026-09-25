@@ -26,3 +26,5 @@ class Pitcher:
     name: str
     throws: str              # "L" or "R"
     vs: dict[str, Split] = field(default_factory=dict)   # OPS allowed + batters faced vs LHB / vs RHB
+    season: dict[str, float] = field(default_factory=dict)   # gs, g, ip, sv, hld, gf
+    recent: list[tuple[int, int]] = field(default_factory=list)   # (days ago, pitches) over the last few days

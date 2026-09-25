@@ -9,11 +9,12 @@ and their positions are chosen together. Because DH has no defensive value, the 
 goes to the hitter who gains the most from not fielding: a strong, reliable bat (talent is shrunk
 by sample size) with the weakest glove. Batting order follows the "The Book" heuristic.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+from data.names import find_by_name
 from data.schema import Hitter, Pitcher
 from models.matchup import LEAGUE_WOBA, PA_PER_BATTER_GAME, WOBA_SCALE, expected_woba
 
@@ -71,8 +72,13 @@ def _best_field_spot(h: Hitter) -> tuple[float, str] | None:
     return max(options) if options else None
 
 
-def build_lineup(hitters: list[Hitter], pitcher: Pitcher, defense_weight: float = 1.0) -> Lineup:
-    """defense_weight=0 gives an offense-first baseline (still respects position eligibility)."""
+FORCED_BONUS = 5.0            # runs/game added so a forced starter is always in the nine (same at every position)
+
+
+def build_lineup(hitters: list[Hitter], pitcher: Pitcher, defense_weight: float = 1.0,
+                 forced: frozenset | set = frozenset()) -> Lineup:
+    """defense_weight=0 gives an offense-first baseline (still respects position eligibility).
+    forced = hitter ids that must be in the starting nine (positions are still chosen by the optimizer)."""
     if len(hitters) < 9:
         raise ValueError(f"Need at least 9 hitters, got {len(hitters)}")
     woba = {h.id: expected_woba(h, pitcher) for h in hitters}
@@ -84,6 +90,8 @@ def build_lineup(hitters: list[Hitter], pitcher: Pitcher, defense_weight: float 
                 v -= INELIGIBLE_PENALTY_C if pos == "C" else INELIGIBLE_PENALTY
             elif pos == h.pos:
                 v += PRIMARY_POS_BONUS      # tiny tie-breaker: prefer a player's natural position
+            if h.id in forced:
+                v += FORCED_BONUS
             value[i, j] = v
     rows, cols = linear_sum_assignment(-value)
 
@@ -103,3 +111,18 @@ def build_lineup(hitters: list[Hitter], pitcher: Pitcher, defense_weight: float 
     else:
         note = f"DH: {dh.hitter.name} - expected wOBA {dh.woba:.3f} over {dh.hitter.pa} PA (no fielding data)"
     return Lineup(spots, sum(s.def_rpg for s in spots), sum(s.off_rpg for s in spots), note)
+
+
+
+def draft_lineup(hitters: list[Hitter], names: list[str], pitcher: Pitcher) -> Lineup:
+    """A user-drafted lineup: exactly nine names in batting order. Positions/defense are assigned optimally
+    among those nine; the batting order is kept as given."""
+    if len(names) != 9:
+        raise SystemExit(f"--opp-lineup needs exactly 9 names separated by commas (got {len(names)})")
+    chosen = [find_by_name(hitters, n, "the opposing active roster") for n in names]
+    if len({h.id for h in chosen}) != 9:
+        raise SystemExit("--opp-lineup lists the same player twice")
+    order = {h.id: k for k, h in enumerate(chosen)}
+    lu = build_lineup(chosen, pitcher)
+    spots = sorted(lu.spots, key=lambda s: order[s.hitter.id])
+    return replace(lu, spots=[replace(s, slot=k + 1) for k, s in enumerate(spots)])
