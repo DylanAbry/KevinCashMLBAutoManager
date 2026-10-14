@@ -16,7 +16,9 @@ def demo_hitters(seed: int = 7, prefix: str = "Player") -> list[Hitter]:
         pa = rng.randint(120, 620)
         base_ops = woba / 0.43 - 0.02
         def_runs = {}
-        if pos not in ("DH", "C"):
+        if pos == "C":
+            def_runs["C"] = rng.uniform(-8, 10)         # catcher defense is framing, not range - see advanced_stats.py
+        elif pos != "DH":
             def_runs[pos] = rng.uniform(-6, 9)
             for p2 in _SECOND_POS.get(pos, [])[:1]:
                 def_runs[p2] = rng.uniform(-5, 5)
@@ -25,8 +27,9 @@ def demo_hitters(seed: int = 7, prefix: str = "Player") -> list[Hitter]:
         k, bb = rng.uniform(0.15, 0.28), rng.uniform(0.05, 0.13)
         hr, s2, s3 = rng.uniform(0.015, 0.055), rng.uniform(0.03, 0.06), rng.uniform(0.002, 0.008)
         s1 = max(0.08, min(0.20, (woba - 0.695 * bb - 1.25 * s2 - 1.58 * s3 - 2.03 * hr) / 0.88))
+        gidp_per_pa = rng.uniform(0.010, 0.038)          # some hitters double up far more than others
         season = {"pa": pa, "k": k * pa, "bb": bb * pa, "s1": s1 * pa, "s2": s2 * pa, "s3": s3 * pa, "hr": hr * pa,
-                  "sb": rng.randint(0, 25), "cs": rng.randint(0, 7), "ops": base_ops}
+                  "sb": rng.randint(0, 25), "cs": rng.randint(0, 7), "ops": base_ops, "gidp": gidp_per_pa * pa}
         out.append(Hitter(
             id=i, name=f"{prefix} {i+1}", pos=pos, bat_side=side, pa=pa,
             woba=woba, xwoba=woba + rng.uniform(-0.015, 0.015), def_runs=def_runs, season=season,

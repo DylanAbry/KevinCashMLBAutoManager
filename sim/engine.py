@@ -129,11 +129,14 @@ def _half_inning(s: GameState, bat: _Side, fld: _Side, rng, counters: list) -> N
         target = p.woba_vs[idx] + p.penalty(fld.faced[j][idx], fld.pc) + edge - fld.def_bonus
         nxt = bat.batters[(idx + 1) % 9]
         nxt_target = p.woba_vs[(idx + 1) % 9] + p.penalty(fld.faced[j][(idx + 1) % 9], fld.pc) + edge - fld.def_bonus
-        if should_ibb(fld.style, s.inning, s.outs, mask, lead, target, nxt_target):
+        # tactical decisions use each hitter's OWN overall quality (fixed all game), not his value against
+        # whichever specific pitcher happens to be in right now - a batter isn't "weak" just because a shutdown
+        # reliever is on the mound, and bunt/IBB calls should track his talent, not the moment's matchup.
+        if should_ibb(fld.style, s.inning, s.outs, mask, lead, b.woba_starter, nxt.woba_starter):
             cum, dlist = transition_table(mask, s.outs, BB)
             dests, pitches, outcome_for_faced = dlist[bisect(cum, rng.random())], PITCHES_IBB, BB
             counters[3] += 1
-        elif should_bunt(bat.style, s.inning, s.outs, mask, -lead, target + (b.risp_delta if mask & 6 else 0.0)):
+        elif should_bunt(bat.style, s.inning, s.outs, mask, -lead, b.woba_starter):
             cum, dlist = bunt_transition_table(mask, s.outs)
             dests, pitches, outcome_for_faced = dlist[bisect(cum, rng.random())], PITCHES_BUNT, None
             counters[2] += 1

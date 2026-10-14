@@ -63,10 +63,11 @@ class TypicalPolicy:
 
 
 class AutoPolicy:
-    def __init__(self, pull_base: float = 0.008, pull_slope: float = 0.0015, hard_cap: int = 110,
-                 relief_need: float = 0.010, mid_inning_need: float = 0.016):
+    def __init__(self, pull_base: float = 0.020, pull_slope: float = 0.0012, hard_cap: int = 110,
+                 relief_need: float = 0.010, mid_inning_need: float = 0.016, min_pitches: int = 70):
         self.pull_base, self.pull_slope, self.hard_cap = pull_base, pull_slope, hard_cap
         self.relief_need, self.mid_need = relief_need, mid_inning_need
+        self.min_pitches = min_pitches
 
     @staticmethod
     def _look(p, batters, faced, pc) -> float:
@@ -115,7 +116,7 @@ class AutoPolicy:
 
     def choose(self, c):
         cur = c.staff[c.cur]
-        if cur.is_starter and c.pc < 55 and c.runs_game < 5:
+        if cur.is_starter and c.pc < self.min_pitches and c.runs_game < 5:
             return None
         r = self.evaluate(c)
         return r["pick"] if r["action"] == "pull" else None

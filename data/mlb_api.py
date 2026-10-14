@@ -1,9 +1,10 @@
 """Rosters, platoon splits, season lines, RISP splits and probable starters from the free MLB Stats API
 (cached to data/cache). `statsapi` is imported lazily so --demo works without network or the package."""
+import sys
 from datetime import date, timedelta
 
 from .advanced_stats import _warn as warn
-from .advanced_stats import enrich_hitters
+from .advanced_stats import enrich_hitters, enrich_pitchers
 from .cache import cached
 from .schema import Hitter, Pitcher
 
@@ -15,7 +16,19 @@ def _num(x, default=0.0):
         return default
 
 
+_TEAM_ID_BY_CODE = {      # stable MLB Stats API team ids - a fast, reliable path for the 30 standard
+    "LAA": 108, "ARI": 109, "BAL": 110, "BOS": 111, "CHC": 112, "CIN": 113, "CLE": 114, "COL": 115,
+    "DET": 116, "HOU": 117, "KC": 118, "LAD": 119, "WSH": 120, "NYM": 121, "ATH": 133, "PIT": 134,
+    "SD": 135, "SEA": 136, "SF": 137, "STL": 138, "TB": 139, "TEX": 140, "TOR": 141, "MIN": 142,
+    "PHI": 143, "ATL": 144, "CWS": 145, "MIA": 146, "NYY": 147, "MIL": 158,
+}      # abbreviations (data/ballparks.py's PARK_FACTOR keys) that statsapi.lookup_team()'s own search
+       # doesn't reliably match for every team (WSH and LAA in particular)
+
+
 def get_team_id(term: str, season: int) -> int:
+    hit = _TEAM_ID_BY_CODE.get(term.upper())
+    if hit is not None:
+        return hit
     import statsapi
     matches = statsapi.lookup_team(term, season=season, sportIds=1)
     if not matches:
@@ -60,7 +73,8 @@ def _parse_season(person: dict) -> dict:
             hits, d, t, hr = (_num(st.get(k)) for k in ("hits", "doubles", "triples", "homeRuns"))
             return {"pa": pa, "k": _num(st.get("strikeOuts")), "bb": _num(st.get("baseOnBalls")) + _num(st.get("hitByPitch")),
                     "s1": hits - d - t - hr, "s2": d, "s3": t, "hr": hr,
-                    "sb": _num(st.get("stolenBases")), "cs": _num(st.get("caughtStealing")), "ops": _num(st.get("ops"))}
+                    "sb": _num(st.get("stolenBases")), "cs": _num(st.get("caughtStealing")), "ops": _num(st.get("ops")),
+                    "gidp": _num(st.get("groundIntoDoublePlay"))}
     return {}
 
 
@@ -148,6 +162,7 @@ def get_pitchers(team_id: int, season: int) -> list[Pitcher]:
     pitchers = [Pitcher(id=p["id"], name=p["fullName"], throws=p.get("pitchHand", {}).get("code", "R"),
                         vs=_parse_splits(p, "battersFaced"))
                 for p in _people_with_splits(ids, "pitching", season)]
+    enrich_pitchers(pitchers, season)
     by_id = {p.id: p for p in pitchers}
     try:
         for p in _people(ids, f"stats(group=[pitching],type=[season],season={season})", "pseason", season):
@@ -166,8 +181,10 @@ def get_pitchers(team_id: int, season: int) -> list[Pitcher]:
 
 def get_pitcher(pitcher_id: int, season: int) -> Pitcher:
     p = _people_with_splits([pitcher_id], "pitching", season)[0]
-    return Pitcher(id=p["id"], name=p["fullName"], throws=p.get("pitchHand", {}).get("code", "R"),
-                   vs=_parse_splits(p, "battersFaced"))
+    pitcher = Pitcher(id=p["id"], name=p["fullName"], throws=p.get("pitchHand", {}).get("code", "R"),
+                      vs=_parse_splits(p, "battersFaced"))
+    enrich_pitchers([pitcher], season)
+    return pitcher
 
 
 def find_player_id(name: str) -> int:
